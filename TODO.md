@@ -1,2 +1,4 @@
 - [X] accept port options
-- [ ] deploy with blaixapps. Setting ports to not conflict with dia.
+- [X] deploy with blaixapps. Setting ports to not conflict with dia.
+- [X] Rule CRUD
+- [ ] Strip trailing slash with nginx to prevent unexpected 404s due to naive routing
