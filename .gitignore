@@ -1,0 +1,14 @@
+# standard stuff
+.devbox
+.gren
+node_modules
+
+# runtime data
+data/*.db*
+
+# compiled assets
+app
+
+# nix build artifacts
+result
+result-*

@@ -1,0 +1,79 @@
+module Main exposing (main)
+
+import HttpServer exposing (Request, Server)
+import HttpServer.Response as Response exposing (Response)
+import Init
+import Node exposing (Environment)
+import Task
+
+
+main : Node.Program Model Msg
+main =
+    Node.defineProgram
+        { init = init
+        , update = update
+        , subscriptions = subscriptions
+        }
+
+
+
+type alias Model =
+    { server : Maybe Server }
+
+
+serverConfig =
+    { host = "0.0.0.0"
+    , port_ = 3000
+    }
+
+
+init : Environment -> Init.Task { model : Model, command : Cmd Msg }
+init env =
+    Init.await HttpServer.initialize <| \serverPermission ->
+        Node.startProgram
+            { model = { server = Nothing }
+            , command =
+                HttpServer.createServer serverPermission serverConfig
+                    |> Task.attempt GotServer
+            }
+
+
+type Msg
+    = GotServer (Result HttpServer.ServerError Server)
+    | GotRequest { request: Request, response: Response }
+
+
+update : Msg -> Model -> { model : Model, command : Cmd Msg }
+update msg model =
+    when msg is
+        GotServer result ->
+            when result is
+                Ok server ->
+                    { model = { server = Just server }
+                    , command = Cmd.none
+                    }
+
+                Err _ ->
+                    { model = model
+                    , command =
+                        Task.executeCmd (Task.succeed (Node.exitWithCode 1))
+                    }
+
+        GotRequest { request, response } ->
+            { model = model
+            , command =
+                response
+                    |> Response.setBody ("You requested: " ++ request.url.path)
+                    |> Response.send
+            }
+
+
+subscriptions : Model -> Sub Msg
+subscriptions model =
+    when model.server is
+        Just server ->
+            HttpServer.onRequest server
+                (\req res -> GotRequest { request = req, response = res })
+
+        Nothing ->
+            Sub.none
