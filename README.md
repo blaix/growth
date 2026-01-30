@@ -58,6 +58,17 @@ journalctl -u ws4sql-growth # to see database location
 journalctl -u growth        # to see app deployment path
 ```
 
+### Password-protection
+
+The nix flake includes an option for HTTP Basic auth.
+If enabled, you'll need to do this one-time server setup to create the password file:
+
+```
+nix-shell -p apacheHttpd --run "htpasswd -c /var/lib/growth/htpasswd <username>"
+```
+
+You'll be prompted to enter and confirm the password.
+
 ## Distribution and Copyright
 
 This is Free Software. All files in this repository are Copyright 2024-present Justin Blake and distributed without warranty under the terms of the GNU Affero General Public License.

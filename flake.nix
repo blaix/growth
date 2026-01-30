@@ -184,6 +184,16 @@ EOF
               default = 12321;
               description = "Port for the ws4sql database server";
             };
+
+            basicAuth = {
+              enable = mkEnableOption "Enable HTTP Basic authentication";
+
+              htpasswdFile = mkOption {
+                type = types.path;
+                default = "/var/lib/growth/htpasswd";
+                description = "Path to htpasswd file for HTTP Basic auth";
+              };
+            };
           };
 
           config = mkIf cfg.enable {
@@ -263,6 +273,8 @@ EOF
                 locations."/" = {
                   proxyPass = "http://127.0.0.1:${toString cfg.appPort}";
                   proxyWebsockets = true;  # Allow WebSocket upgrades to pass through to server.js
+                } // lib.optionalAttrs cfg.basicAuth.enable {
+                  basicAuthFile = cfg.basicAuth.htpasswdFile;
                 };
               };
             };
