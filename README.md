@@ -25,7 +25,10 @@ See `flake.nix` for details.
 
 ## Deployment
 
-This project has its own [flake](flake.nix) for its build and services, but is deployed to blaixapps via https://github.com/blaix/homer
+This project has its own [flake](flake.nix) for its build and services, but doesn't handle server provisioning on its own.
+
+My copy is deployed to my personal server via https://github.com/blaix/homer.
+The deployment process looks like this:
 
 ```
 cd ~/homer
