@@ -1,3 +1,2 @@
-- [ ] Main.gren should take an optional port. Enable as a flake option.
-- [ ] ws4sql port option
+- [X] accept port options
 - [ ] deploy with blaixapps. Setting ports to not conflict with dia.

@@ -178,6 +178,12 @@ EOF
               default = 3000;
               description = "Port for the Node.js application";
             };
+
+            ws4sqlPort = mkOption {
+              type = types.int;
+              default = 12321;
+              description = "Port for the ws4sql database server";
+            };
           };
 
           config = mkIf cfg.enable {
@@ -188,7 +194,7 @@ EOF
 
               serviceConfig = {
                 ExecStartPre = "${pkgs.coreutils}/bin/echo 'Database: ${cfg.dataDir}/growth.db'";
-                ExecStart = "${ws4sql.packages.${system}.default}/bin/ws4sql --quick-db ${cfg.dataDir}/growth.db";
+                ExecStart = "${ws4sql.packages.${system}.default}/bin/ws4sql -port ${toString cfg.ws4sqlPort} --quick-db ${cfg.dataDir}/growth.db";
                 DynamicUser = true;
                 StateDirectory = "growth";
                 Restart = "always";
@@ -206,7 +212,7 @@ EOF
 
               serviceConfig = {
                 ExecStartPre = "${pkgs.coreutils}/bin/echo 'App deployed at: ${growth-package}/share/growth'";
-                ExecStart = "${pkgs.nodejs}/bin/node ${growth-package}/share/growth/app";
+                ExecStart = "${pkgs.nodejs}/bin/node ${growth-package}/share/growth/app --port ${toString cfg.appPort} --ws4sql-port ${toString cfg.ws4sqlPort}";
                 WorkingDirectory = "${growth-package}/share/growth";
                 DynamicUser = true;
                 User = "growth";

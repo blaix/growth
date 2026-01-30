@@ -1,9 +1,11 @@
 module Main exposing (main)
 
+import Array
 import HttpServer exposing (Request, Server)
 import HttpServer.Response as Response exposing (Response)
 import Init
 import Node exposing (Environment)
+import Stream.Log
 import Task
 
 
@@ -18,20 +20,83 @@ main =
 
 
 type alias Model =
-    { server : Maybe Server }
-
-
-serverConfig =
-    { host = "0.0.0.0"
-    , port_ = 3000
+    { server : Maybe Server
+    , port_ : Int
+    , ws4sqlPort : Int
+    , env : Node.Environment
     }
+
+
+type alias Config =
+    { port_ : Int
+    , ws4sqlPort : Int
+    }
+
+
+defaultConfig : Config
+defaultConfig =
+    { port_ = 3000
+    , ws4sqlPort = 12321
+    }
+
+
+parseArgs : Array String -> Config
+parseArgs args =
+    Array.foldl parseArg { config = defaultConfig, pendingFlag = Nothing } args
+        |> .config
+
+
+parseArg :
+    String
+    -> { config : Config, pendingFlag : Maybe String }
+    -> { config : Config, pendingFlag : Maybe String }
+parseArg arg state =
+    when state.pendingFlag is
+        Just "--port" ->
+            { config =
+                { state.config
+                    | port_ = String.toInt arg |> Maybe.withDefault state.config.port_
+                }
+            , pendingFlag = Nothing
+            }
+
+        Just "--ws4sql-port" ->
+            { config =
+                { state.config
+                    | ws4sqlPort = String.toInt arg |> Maybe.withDefault state.config.ws4sqlPort
+                }
+            , pendingFlag = Nothing
+            }
+
+        Just _ ->
+            { state | pendingFlag = Nothing }
+
+        Nothing ->
+            if arg == "--port" || arg == "--ws4sql-port" then
+                { state | pendingFlag = Just arg }
+            else
+                state
 
 
 init : Environment -> Init.Task { model : Model, command : Cmd Msg }
 init env =
+    let
+        config =
+            parseArgs env.args
+
+        serverConfig =
+            { host = "0.0.0.0"
+            , port_ = config.port_
+            }
+    in
     Init.await HttpServer.initialize <| \serverPermission ->
         Node.startProgram
-            { model = { server = Nothing }
+            { model =
+                { server = Nothing
+                , port_ = config.port_
+                , ws4sqlPort = config.ws4sqlPort
+                , env = env
+                }
             , command =
                 HttpServer.createServer serverPermission serverConfig
                     |> Task.attempt GotServer
@@ -49,14 +114,22 @@ update msg model =
         GotServer result ->
             when result is
                 Ok server ->
-                    { model = { server = Just server }
-                    , command = Cmd.none
+                    { model = { model | server = Just server }
+                    , command =
+                        model.port_
+                            |> String.fromInt
+                            |> String.prepend "Server started on port "
+                            |> Stream.Log.line model.env.stdout
+                            |> Task.execute
                     }
 
-                Err _ ->
+                Err (HttpServer.ServerError error) ->
                     { model = model
                     , command =
-                        Task.executeCmd (Task.succeed (Node.exitWithCode 1))
+                        "Failed to start server: " ++ error.message
+                            |> Stream.Log.line model.env.stderr
+                            |> Task.map (\_ -> Node.exitWithCode 1)
+                            |> Task.executeCmd
                     }
 
         GotRequest { request, response } ->
