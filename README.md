@@ -64,7 +64,9 @@ The nix flake includes an option for HTTP Basic auth.
 If enabled, you'll need to do this one-time server setup to create the password file:
 
 ```
-nix-shell -p apacheHttpd --run "htpasswd -c /var/lib/growth/htpasswd <username>"
+# htpasswd path should match path specified in homer or the default in this flake
+sudo nix-shell -p apacheHttpd --run "htpasswd -c /etc/htpasswd <username>" # will prompt for your desired password
+sudo chown root:nginx /etc/htpasswd && sudo chmod 640 /etc/htpasswd
 ```
 
 You'll be prompted to enter and confirm the password.

@@ -190,7 +190,7 @@ EOF
 
               htpasswdFile = mkOption {
                 type = types.path;
-                default = "/var/lib/growth/htpasswd";
+                default = "/etc/htpasswd";
                 description = "Path to htpasswd file for HTTP Basic auth";
               };
             };
