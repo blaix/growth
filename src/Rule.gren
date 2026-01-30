@@ -1,0 +1,114 @@
+module Rule exposing
+    ( Rule
+    , RuleId
+    , ruleIdFromInt
+    , ruleIdToInt
+    , getAllRules
+    , getRule
+    , createRule
+    , updateRule
+    , deleteRule
+    )
+
+import Array exposing (Array)
+import Db
+import Db.Decode as Decode
+import Db.Encode as Encode
+import Task exposing (Task)
+
+
+type RuleId
+    = RuleId Int
+
+
+ruleIdFromInt : Int -> RuleId
+ruleIdFromInt id =
+    RuleId id
+
+
+ruleIdToInt : RuleId -> Int
+ruleIdToInt (RuleId id) =
+    id
+
+
+type alias Rule =
+    { id : RuleId
+    , rule : String
+    , step : Int
+    }
+
+
+
+-- READ
+
+
+getAllRules : Db.Connection -> Task Db.Error (Array Rule)
+getAllRules connection =
+    Db.getAll connection
+        { query = "SELECT id, rule, step FROM rules ORDER BY step ASC"
+        , parameters = []
+        , decoder = ruleDecoder
+        }
+
+
+getRule : Db.Connection -> RuleId -> Task Db.Error (Maybe Rule)
+getRule connection ruleId =
+    Db.getMaybeOne connection
+        { query = "SELECT id, rule, step FROM rules WHERE id = :id"
+        , parameters = [ Encode.int "id" (ruleIdToInt ruleId) ]
+        , decoder = ruleDecoder
+        }
+
+
+
+-- WRITE
+
+
+createRule : Db.Connection -> { rule : String, step : Int } -> Task Db.Error {}
+createRule connection newRule =
+    Db.execute connection
+        { statement = "INSERT INTO rules (rule, step) VALUES (:rule, :step)"
+        , parameters =
+            [ Encode.string "rule" newRule.rule
+            , Encode.int "step" newRule.step
+            ]
+        }
+        |> Task.map (\_ -> {})
+
+
+updateRule : Db.Connection -> Rule -> Task Db.Error {}
+updateRule connection rule =
+    Db.execute connection
+        { statement = "UPDATE rules SET rule = :rule, step = :step WHERE id = :id"
+        , parameters =
+            [ Encode.int "id" (ruleIdToInt rule.id)
+            , Encode.string "rule" rule.rule
+            , Encode.int "step" rule.step
+            ]
+        }
+        |> Task.map (\_ -> {})
+
+
+deleteRule : Db.Connection -> RuleId -> Task Db.Error {}
+deleteRule connection ruleId =
+    Db.execute connection
+        { statement = "DELETE FROM rules WHERE id = :id"
+        , parameters = [ Encode.int "id" (ruleIdToInt ruleId) ]
+        }
+        |> Task.map (\_ -> {})
+
+
+
+-- DECODER
+
+
+ruleDecoder : Decode.Decoder Rule
+ruleDecoder =
+    Decode.field Decode.int "id" <| \id ->
+    Decode.field Decode.string "rule" <| \rule ->
+    Decode.field Decode.int "step" <| \step ->
+    Decode.succeed
+        { id = ruleIdFromInt id
+        , rule = rule
+        , step = step
+        }

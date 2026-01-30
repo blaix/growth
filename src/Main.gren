@@ -1,12 +1,20 @@
 module Main exposing (main)
 
-import Array
+import Array exposing (Array)
+import Bytes
+import Db
+import Dict exposing (Dict)
+import HttpClient
 import HttpServer exposing (Request, Server)
 import HttpServer.Response as Response exposing (Response)
 import Init
 import Node exposing (Environment)
+import Rule exposing (Rule, RuleId)
 import Stream.Log
 import Task
+import Transmutable.Html as H exposing (Html)
+import Transmutable.Html.Attributes as A
+import Url
 
 
 main : Node.Program Model Msg
@@ -19,11 +27,15 @@ main =
 
 
 
+-- MODEL
+
+
 type alias Model =
     { server : Maybe Server
     , port_ : Int
     , ws4sqlPort : Int
     , env : Node.Environment
+    , dbConnection : Db.Connection
     }
 
 
@@ -78,34 +90,81 @@ parseArg arg state =
                 state
 
 
+
+-- INIT
+
+
 init : Environment -> Init.Task { model : Model, command : Cmd Msg }
 init env =
-    let
-        config =
-            parseArgs env.args
-
-        serverConfig =
-            { host = "0.0.0.0"
-            , port_ = config.port_
-            }
-    in
     Init.await HttpServer.initialize <| \serverPermission ->
+    Init.await HttpClient.initialize <| \httpClientPermission ->
+        let
+            config =
+                parseArgs env.args
+
+            dbConnection =
+                Db.init httpClientPermission
+                    ("http://localhost:" ++ String.fromInt config.ws4sqlPort ++ "/growth")
+
+            serverConfig =
+                { host = "0.0.0.0"
+                , port_ = config.port_
+                }
+        in
         Node.startProgram
             { model =
                 { server = Nothing
                 , port_ = config.port_
                 , ws4sqlPort = config.ws4sqlPort
                 , env = env
+                , dbConnection = dbConnection
                 }
             , command =
-                HttpServer.createServer serverPermission serverConfig
-                    |> Task.attempt GotServer
+                Cmd.batch
+                    [ initializeSchema dbConnection
+                        |> Task.attempt SchemaInitialized
+                    , HttpServer.createServer serverPermission serverConfig
+                        |> Task.attempt GotServer
+                    ]
             }
+
+
+
+-- SCHEMA
+
+
+initializeSchema : Db.Connection -> Task.Task Db.Error {}
+initializeSchema connection =
+    Db.execute connection
+        { statement = """
+            CREATE TABLE IF NOT EXISTS rules (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                rule TEXT NOT NULL,
+                step INTEGER NOT NULL
+            )
+            """
+        , parameters = []
+        }
+        |> Task.map (\_ -> {})
+
+
+
+-- MSG
 
 
 type Msg
     = GotServer (Result HttpServer.ServerError Server)
-    | GotRequest { request: Request, response: Response }
+    | GotRequest { request : Request, response : Response }
+    | SchemaInitialized (Result Db.Error {})
+    | GotRules { response : Response, result : Result Db.Error (Array Rule) }
+    | GotRule { response : Response, ruleId : String, result : Result Db.Error (Maybe Rule) }
+    | RuleCreated { response : Response, result : Result Db.Error {} }
+    | RuleUpdated { response : Response, result : Result Db.Error {} }
+    | RuleDeleted { response : Response, result : Result Db.Error {} }
+
+
+
+-- UPDATE
 
 
 update : Msg -> Model -> { model : Model, command : Cmd Msg }
@@ -126,19 +185,477 @@ update msg model =
                 Err (HttpServer.ServerError error) ->
                     { model = model
                     , command =
-                        "Failed to start server: " ++ error.message
+                        "Failed to start server: "
+                            ++ error.message
                             |> Stream.Log.line model.env.stderr
                             |> Task.map (\_ -> Node.exitWithCode 1)
                             |> Task.executeCmd
                     }
 
+        SchemaInitialized result ->
+            when result is
+                Ok _ ->
+                    { model = model
+                    , command =
+                        Stream.Log.line model.env.stdout "Database schema initialized"
+                            |> Task.execute
+                    }
+
+                Err error ->
+                    { model = model
+                    , command =
+                        "Failed to initialize schema: "
+                            ++ Db.errorToString error
+                            |> Stream.Log.line model.env.stderr
+                            |> Task.execute
+                    }
+
         GotRequest { request, response } ->
+            handleRequest model request response
+
+        GotRules { response, result } ->
+            when result is
+                Ok rules ->
+                    { model = model
+                    , command = sendHtml response (rulesListPage rules)
+                    }
+
+                Err error ->
+                    { model = model
+                    , command = sendError response 500 ("Database error: " ++ Db.errorToString error)
+                    }
+
+        GotRule { response, ruleId, result } ->
+            when result is
+                Ok maybeRule ->
+                    when maybeRule is
+                        Just rule ->
+                            { model = model
+                            , command = sendHtml response (editRulePage rule)
+                            }
+
+                        Nothing ->
+                            { model = model
+                            , command = sendError response 404 ("Rule not found: " ++ ruleId)
+                            }
+
+                Err error ->
+                    { model = model
+                    , command = sendError response 500 ("Database error: " ++ Db.errorToString error)
+                    }
+
+        RuleCreated { response, result } ->
+            when result is
+                Ok _ ->
+                    { model = model
+                    , command = redirect response "/rules"
+                    }
+
+                Err error ->
+                    { model = model
+                    , command = sendError response 500 ("Failed to create rule: " ++ Db.errorToString error)
+                    }
+
+        RuleUpdated { response, result } ->
+            when result is
+                Ok _ ->
+                    { model = model
+                    , command = redirect response "/rules"
+                    }
+
+                Err error ->
+                    { model = model
+                    , command = sendError response 500 ("Failed to update rule: " ++ Db.errorToString error)
+                    }
+
+        RuleDeleted { response, result } ->
+            when result is
+                Ok _ ->
+                    { model = model
+                    , command = redirect response "/rules"
+                    }
+
+                Err error ->
+                    { model = model
+                    , command = sendError response 500 ("Failed to delete rule: " ++ Db.errorToString error)
+                    }
+
+
+
+-- ROUTING
+
+
+handleRequest : Model -> Request -> Response -> { model : Model, command : Cmd Msg }
+handleRequest model request response =
+    when Array.dropFirst 1 (String.split "/" request.url.path) is
+        [ "" ] ->
+            { model = model
+            , command = sendHtml response homePage
+            }
+
+        [ "rules" ] ->
+            when request.method is
+                HttpServer.GET ->
+                    { model = model
+                    , command =
+                        Rule.getAllRules model.dbConnection
+                            |> Task.attempt (\result -> GotRules { response = response, result = result })
+                    }
+
+                HttpServer.POST ->
+                    handleCreateRule model request response
+
+                _ ->
+                    { model = model
+                    , command = sendError response 405 "Method not allowed"
+                    }
+
+        [ "rules", idStr, "edit" ] ->
+            when request.method is
+                HttpServer.GET ->
+                    when String.toInt idStr is
+                        Just id ->
+                            { model = model
+                            , command =
+                                Rule.getRule model.dbConnection (Rule.ruleIdFromInt id)
+                                    |> Task.attempt (\result -> GotRule { response = response, ruleId = idStr, result = result })
+                            }
+
+                        Nothing ->
+                            { model = model
+                            , command = sendError response 400 "Invalid rule ID"
+                            }
+
+                _ ->
+                    { model = model
+                    , command = sendError response 405 "Method not allowed"
+                    }
+
+        [ "rules", idStr, "delete" ] ->
+            when request.method is
+                HttpServer.POST ->
+                    when String.toInt idStr is
+                        Just id ->
+                            { model = model
+                            , command =
+                                Rule.deleteRule model.dbConnection (Rule.ruleIdFromInt id)
+                                    |> Task.attempt (\result -> RuleDeleted { response = response, result = result })
+                            }
+
+                        Nothing ->
+                            { model = model
+                            , command = sendError response 400 "Invalid rule ID"
+                            }
+
+                _ ->
+                    { model = model
+                    , command = sendError response 405 "Method not allowed"
+                    }
+
+        [ "rules", idStr ] ->
+            when request.method is
+                HttpServer.POST ->
+                    handleUpdateRule model idStr request response
+
+                _ ->
+                    { model = model
+                    , command = sendError response 405 "Method not allowed"
+                    }
+
+        _ ->
+            { model = model
+            , command = sendError response 404 "Not found"
+            }
+
+
+
+-- FORM HANDLERS
+
+
+handleCreateRule : Model -> Request -> Response -> { model : Model, command : Cmd Msg }
+handleCreateRule model request response =
+    let
+        formData =
+            request.body
+                |> Bytes.toString
+                |> Maybe.withDefault ""
+                |> parseFormData
+
+        maybeRule =
+            Dict.get "rule" formData
+
+        maybeStep =
+            Dict.get "step" formData
+                |> Maybe.andThen String.toInt
+    in
+    when { rule = maybeRule, step = maybeStep } is
+        { rule = Just rule, step = Just step } ->
             { model = model
             , command =
-                response
-                    |> Response.setBody ("You requested: " ++ request.url.path)
-                    |> Response.send
+                Rule.createRule model.dbConnection { rule = rule, step = step }
+                    |> Task.attempt (\result -> RuleCreated { response = response, result = result })
             }
+
+        _ ->
+            { model = model
+            , command = sendError response 400 "Missing required fields: rule and step"
+            }
+
+
+handleUpdateRule : Model -> String -> Request -> Response -> { model : Model, command : Cmd Msg }
+handleUpdateRule model idStr request response =
+    let
+        formData =
+            request.body
+                |> Bytes.toString
+                |> Maybe.withDefault ""
+                |> parseFormData
+
+        maybeId =
+            String.toInt idStr
+
+        maybeRule =
+            Dict.get "rule" formData
+
+        maybeStep =
+            Dict.get "step" formData
+                |> Maybe.andThen String.toInt
+    in
+    when { id = maybeId, rule = maybeRule, step = maybeStep } is
+        { id = Just id, rule = Just rule, step = Just step } ->
+            { model = model
+            , command =
+                Rule.updateRule model.dbConnection
+                    { id = Rule.ruleIdFromInt id
+                    , rule = rule
+                    , step = step
+                    }
+                    |> Task.attempt (\result -> RuleUpdated { response = response, result = result })
+            }
+
+        _ ->
+            { model = model
+            , command = sendError response 400 "Missing required fields"
+            }
+
+
+
+-- FORM DATA PARSING
+
+
+parseFormData : String -> Dict String String
+parseFormData body =
+    body
+        |> String.split "&"
+        |> Array.foldl
+            (\pair acc ->
+                when String.split "=" pair is
+                    [ key, value ] ->
+                        Dict.set (Url.percentDecode key |> Maybe.withDefault key) (Url.percentDecode value |> Maybe.withDefault value) acc
+
+                    _ ->
+                        acc
+            )
+            Dict.empty
+
+
+
+-- RESPONSE HELPERS
+
+
+sendHtml : Response -> String -> Cmd Msg
+sendHtml response html =
+    response
+        |> Response.setHeader "Content-Type" "text/html; charset=utf-8"
+        |> Response.setBody html
+        |> Response.send
+
+
+sendError : Response -> Int -> String -> Cmd Msg
+sendError response status message =
+    response
+        |> Response.setStatus status
+        |> Response.setHeader "Content-Type" "text/html; charset=utf-8"
+        |> Response.setBody (errorPage status message)
+        |> Response.send
+
+
+redirect : Response -> String -> Cmd Msg
+redirect response path =
+    response
+        |> Response.setStatus 303
+        |> Response.setHeader "Location" path
+        |> Response.send
+
+
+
+-- VIEWS
+
+
+layout : { title : String, body : Array (Html msg) } -> String
+layout config =
+    "<!DOCTYPE html>"
+        ++ H.toString
+            (H.html []
+                [ H.head []
+                    [ H.meta [ A.charset "utf-8" ]
+                    , H.meta
+                        [ A.name "viewport"
+                        , A.content "width=device-width, initial-scale=1"
+                        ]
+                    , H.title [ H.text config.title ]
+                    , H.link
+                        [ A.rel "stylesheet"
+                        , A.href "/styles.css"
+                        ]
+                    ]
+                , H.body [] config.body
+                ]
+            )
+
+
+homePage : String
+homePage =
+    layout
+        { title = "Growth"
+        , body =
+            [ H.h1 [] [ H.text "Growth" ]
+            , H.p [] [ H.text "A self-improvement app" ]
+            , H.nav []
+                [ H.ul []
+                    [ H.li []
+                        [ H.a [ A.href "/rules" ] [ H.text "Manage Rules" ]
+                        ]
+                    ]
+                ]
+            ]
+        }
+
+
+rulesListPage : Array Rule -> String
+rulesListPage rules =
+    layout
+        { title = "Rules - Growth"
+        , body =
+            [ H.h1 [] [ H.text "Rules" ]
+            , H.p [] [ H.a [ A.href "/" ] [ H.text "Back to Home" ] ]
+            , H.h2 [] [ H.text "Add New Rule" ]
+            , ruleForm Nothing
+            , H.h2 [] [ H.text "Current Rules" ]
+            , if Array.isEmpty rules then
+                H.p [] [ H.text "No rules yet. Add one above!" ]
+              else
+                H.ul [] (Array.map ruleItem rules)
+            ]
+        }
+
+
+ruleItem : Rule -> Html msg
+ruleItem rule =
+    let
+        idStr =
+            String.fromInt (Rule.ruleIdToInt rule.id)
+    in
+    H.li []
+        [ H.strong [] [ H.text ("Step " ++ String.fromInt rule.step ++ ": ") ]
+        , H.text rule.rule
+        , H.text " "
+        , H.a [ A.href ("/rules/" ++ idStr ++ "/edit") ] [ H.text "[Edit]" ]
+        , H.form
+            [ A.method "post"
+            , A.action ("/rules/" ++ idStr ++ "/delete")
+            , A.style "display" "inline"
+            ]
+            [ H.button [ A.type_ "submit" ] [ H.text "[Delete]" ]
+            ]
+        ]
+
+
+ruleForm : Maybe Rule -> Html msg
+ruleForm maybeRule =
+    let
+        action =
+            when maybeRule is
+                Nothing ->
+                    "/rules"
+
+                Just rule ->
+                    "/rules/" ++ String.fromInt (Rule.ruleIdToInt rule.id)
+
+        ruleValue =
+            maybeRule
+                |> Maybe.map .rule
+                |> Maybe.withDefault ""
+
+        stepValue =
+            maybeRule
+                |> Maybe.map (.step >> String.fromInt)
+                |> Maybe.withDefault "1"
+
+        buttonText =
+            when maybeRule is
+                Nothing ->
+                    "Add Rule"
+
+                Just _ ->
+                    "Update Rule"
+    in
+    H.form [ A.method "post", A.action action ]
+        [ H.div []
+            [ H.label [ A.for "rule" ] [ H.text "Rule: " ]
+            , H.input
+                [ A.type_ "text"
+                , A.name "rule"
+                , A.id "rule"
+                , A.value ruleValue
+                , A.attribute "required" "required"
+                ]
+                []
+            ]
+        , H.div []
+            [ H.label [ A.for "step" ] [ H.text "Step: " ]
+            , H.input
+                [ A.type_ "number"
+                , A.name "step"
+                , A.id "step"
+                , A.value stepValue
+                , A.attribute "min" "1"
+                , A.attribute "required" "required"
+                ]
+                []
+            ]
+        , H.div []
+            [ H.button [ A.type_ "submit" ] [ H.text buttonText ]
+            ]
+        ]
+
+
+editRulePage : Rule -> String
+editRulePage rule =
+    layout
+        { title = "Edit Rule - Growth"
+        , body =
+            [ H.h1 [] [ H.text "Edit Rule" ]
+            , H.p [] [ H.a [ A.href "/rules" ] [ H.text "Back to Rules" ] ]
+            , ruleForm (Just rule)
+            ]
+        }
+
+
+errorPage : Int -> String -> String
+errorPage status message =
+    layout
+        { title = "Error - Growth"
+        , body =
+            [ H.h1 [] [ H.text ("Error " ++ String.fromInt status) ]
+            , H.p [] [ H.text message ]
+            , H.p [] [ H.a [ A.href "/" ] [ H.text "Back to Home" ] ]
+            ]
+        }
+
+
+
+-- SUBSCRIPTIONS
 
 
 subscriptions : Model -> Sub Msg
