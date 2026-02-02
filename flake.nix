@@ -270,6 +270,9 @@ EOF
                 http2 = false;  # Disable HTTP/2 to enable WebSocket upgrades
                 # Auth handled by app (token-based)
 
+                # Strip trailing slashes (except for root /)
+                extraConfig = "rewrite ^(.+)/$ $1 permanent;";
+
                 locations."/" = {
                   proxyPass = "http://127.0.0.1:${toString cfg.appPort}";
                   proxyWebsockets = true;  # Allow WebSocket upgrades to pass through to server.js
