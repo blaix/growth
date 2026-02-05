@@ -135,16 +135,20 @@ init env =
 
 initializeSchema : Db.Connection -> Task.Task Db.Error {}
 initializeSchema connection =
-    Db.execute connection
-        { statement = """
-            CREATE TABLE IF NOT EXISTS rules (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                rule TEXT NOT NULL,
-                step INTEGER NOT NULL
-            )
-            """
-        , parameters = []
-        }
+    Db.transaction connection
+        [ { statement = """
+              CREATE TABLE IF NOT EXISTS rules (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  rule TEXT NOT NULL,
+                  step INTEGER NOT NULL
+              )
+              """
+          , parameters = []
+          }
+        , { statement = "ALTER TABLE rules RENAME COLUMN step TO interval"
+          , parameters = []
+          }
+        ]
         |> Task.map (\_ -> {})
 
 
@@ -384,21 +388,21 @@ handleCreateRule model request response =
         maybeRule =
             Dict.get "rule" formData
 
-        maybeStep =
-            Dict.get "step" formData
+        maybeInterval =
+            Dict.get "interval" formData
                 |> Maybe.andThen String.toInt
     in
-    when { rule = maybeRule, step = maybeStep } is
-        { rule = Just rule, step = Just step } ->
+    when { rule = maybeRule, interval = maybeInterval } is
+        { rule = Just rule, interval = Just interval } ->
             { model = model
             , command =
-                Rule.createRule model.dbConnection { rule = rule, step = step }
+                Rule.createRule model.dbConnection { rule = rule, interval = interval }
                     |> Task.attempt (\result -> RuleCreated { response = response, result = result })
             }
 
         _ ->
             { model = model
-            , command = sendError response 400 "Missing required fields: rule and step"
+            , command = sendError response 400 "Missing required fields: rule and interval"
             }
 
 
@@ -417,18 +421,18 @@ handleUpdateRule model idStr request response =
         maybeRule =
             Dict.get "rule" formData
 
-        maybeStep =
-            Dict.get "step" formData
+        maybeInterval =
+            Dict.get "interval" formData
                 |> Maybe.andThen String.toInt
     in
-    when { id = maybeId, rule = maybeRule, step = maybeStep } is
-        { id = Just id, rule = Just rule, step = Just step } ->
+    when { id = maybeId, rule = maybeRule, interval = maybeInterval } is
+        { id = Just id, rule = Just rule, interval = Just interval } ->
             { model = model
             , command =
                 Rule.updateRule model.dbConnection
                     { id = Rule.ruleIdFromInt id
                     , rule = rule
-                    , step = step
+                    , interval = interval
                     }
                     |> Task.attempt (\result -> RuleUpdated { response = response, result = result })
             }
@@ -575,7 +579,7 @@ ruleItem rule =
     in
     H.tr []
         [ H.td [] [ H.text rule.rule ]
-        , H.td [ A.style "white-space" "nowrap" ] [ H.small [ A.class "muted" ] [ H.text ("Interval: " ++ String.fromInt rule.step) ] ]
+        , H.td [ A.style "white-space" "nowrap" ] [ H.small [ A.class "muted" ] [ H.text ("Interval: " ++ String.fromInt rule.interval) ] ]
         , H.td [ A.class "cluster gap-4xs", A.style "align-items" "center" ]
             [ H.form
                 [ A.method "post"
@@ -606,9 +610,9 @@ ruleForm maybeRule =
                 |> Maybe.map .rule
                 |> Maybe.withDefault ""
 
-        stepValue =
+        intervalValue =
             maybeRule
-                |> Maybe.map (.step >> String.fromInt)
+                |> Maybe.map (.interval >> String.fromInt)
                 |> Maybe.withDefault "1"
 
         buttonText =
@@ -632,12 +636,12 @@ ruleForm maybeRule =
                 []
             ]
         , H.div []
-            [ H.label [ A.for "step" ] [ H.text "Interval" ]
+            [ H.label [ A.for "interval" ] [ H.text "Interval" ]
             , H.input
                 [ A.type_ "number"
-                , A.name "step"
-                , A.id "step"
-                , A.value stepValue
+                , A.name "interval"
+                , A.id "interval"
+                , A.value intervalValue
                 , A.attribute "min" "1"
                 , A.attribute "required" "required"
                 , A.style "width" "5rem"

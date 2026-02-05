@@ -34,7 +34,7 @@ ruleIdToInt (RuleId id) =
 type alias Rule =
     { id : RuleId
     , rule : String
-    , step : Int
+    , interval : Int
     }
 
 
@@ -45,7 +45,7 @@ type alias Rule =
 getAllRules : Db.Connection -> Task Db.Error (Array Rule)
 getAllRules connection =
     Db.getAll connection
-        { query = "SELECT id, rule, step FROM rules ORDER BY step ASC"
+        { query = "SELECT id, rule, interval FROM rules ORDER BY rule ASC"
         , parameters = []
         , decoder = ruleDecoder
         }
@@ -54,7 +54,7 @@ getAllRules connection =
 getRule : Db.Connection -> RuleId -> Task Db.Error (Maybe Rule)
 getRule connection ruleId =
     Db.getMaybeOne connection
-        { query = "SELECT id, rule, step FROM rules WHERE id = :id"
+        { query = "SELECT id, rule, interval FROM rules WHERE id = :id"
         , parameters = [ Encode.int "id" (ruleIdToInt ruleId) ]
         , decoder = ruleDecoder
         }
@@ -64,13 +64,13 @@ getRule connection ruleId =
 -- WRITE
 
 
-createRule : Db.Connection -> { rule : String, step : Int } -> Task Db.Error {}
+createRule : Db.Connection -> { rule : String, interval : Int } -> Task Db.Error {}
 createRule connection newRule =
     Db.execute connection
-        { statement = "INSERT INTO rules (rule, step) VALUES (:rule, :step)"
+        { statement = "INSERT INTO rules (rule, interval) VALUES (:rule, :interval)"
         , parameters =
             [ Encode.string "rule" newRule.rule
-            , Encode.int "step" newRule.step
+            , Encode.int "interval" newRule.interval
             ]
         }
         |> Task.map (\_ -> {})
@@ -79,11 +79,11 @@ createRule connection newRule =
 updateRule : Db.Connection -> Rule -> Task Db.Error {}
 updateRule connection rule =
     Db.execute connection
-        { statement = "UPDATE rules SET rule = :rule, step = :step WHERE id = :id"
+        { statement = "UPDATE rules SET rule = :rule, interval = :interval WHERE id = :id"
         , parameters =
             [ Encode.int "id" (ruleIdToInt rule.id)
             , Encode.string "rule" rule.rule
-            , Encode.int "step" rule.step
+            , Encode.int "interval" rule.interval
             ]
         }
         |> Task.map (\_ -> {})
@@ -106,9 +106,9 @@ ruleDecoder : Decode.Decoder Rule
 ruleDecoder =
     Decode.field Decode.int "id" <| \id ->
     Decode.field Decode.string "rule" <| \rule ->
-    Decode.field Decode.int "step" <| \step ->
+    Decode.field Decode.int "interval" <| \interval ->
     Decode.succeed
         { id = ruleIdFromInt id
         , rule = rule
-        , step = step
+        , interval = interval
         }
