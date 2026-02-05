@@ -445,13 +445,20 @@ handleUpdateRule model idStr request response =
 
 parseFormData : String -> Dict String String
 parseFormData body =
+    let
+        decodeFormValue str =
+            str
+                |> String.replace "+" " "
+                |> Url.percentDecode
+                |> Maybe.withDefault str
+    in
     body
         |> String.split "&"
         |> Array.foldl
             (\pair acc ->
                 when String.split "=" pair is
                     [ key, value ] ->
-                        Dict.set (Url.percentDecode key |> Maybe.withDefault key) (Url.percentDecode value |> Maybe.withDefault value) acc
+                        Dict.set (decodeFormValue key) (decodeFormValue value) acc
 
                     _ ->
                         acc
@@ -506,10 +513,16 @@ layout config =
                     , H.title [ H.text config.title ]
                     , H.link
                         [ A.rel "stylesheet"
+                        , A.href "https://cdn.jsdelivr.net/npm/kelpui@1/css/kelp.css"
+                        ]
+                    , H.link
+                        [ A.rel "stylesheet"
                         , A.href "/styles.css"
                         ]
                     ]
-                , H.body [] config.body
+                , H.body []
+                    [ H.main_ [ A.class "container-l stack" ] config.body
+                    ]
                 ]
             )
 
@@ -522,11 +535,7 @@ homePage =
             [ H.h1 [] [ H.text "Growth" ]
             , H.p [] [ H.text "A self-improvement app" ]
             , H.nav []
-                [ H.ul []
-                    [ H.li []
-                        [ H.a [ A.href "/rules" ] [ H.text "Manage Rules" ]
-                        ]
-                    ]
+                [ H.a [ A.href "/rules", A.class "btn primary" ] [ H.text "Manage Rules" ]
                 ]
             ]
         }
@@ -537,15 +546,23 @@ rulesListPage rules =
     layout
         { title = "Rules - Growth"
         , body =
-            [ H.h1 [] [ H.text "Rules" ]
-            , H.p [] [ H.a [ A.href "/" ] [ H.text "Back to Home" ] ]
-            , H.h2 [] [ H.text "Add New Rule" ]
-            , ruleForm Nothing
-            , H.h2 [] [ H.text "Current Rules" ]
-            , if Array.isEmpty rules then
-                H.p [] [ H.text "No rules yet. Add one above!" ]
-              else
-                H.ul [] (Array.map ruleItem rules)
+            [ H.header [ A.class "stack gap-4xs" ]
+                [ H.a [ A.href "/", A.class "link-subtle" ] [ H.text "← Home" ]
+                , H.h1 [] [ H.text "Rules" ]
+                ]
+            , H.section [ A.class "stack" ]
+                [ H.h2 [] [ H.text "Add New Rule" ]
+                , ruleForm Nothing
+                ]
+            , H.hr [] []
+            , H.section [ A.class "stack" ]
+                [ H.h2 [] [ H.text "Current Rules" ]
+                , if Array.isEmpty rules then
+                    H.p [] [ H.text "No rules yet. Add one above!" ]
+                  else
+                    H.table [ A.class "table-striped" ] 
+                        [ H.tbody [] (Array.map ruleItem rules) ]
+                ]
             ]
         }
 
@@ -556,17 +573,19 @@ ruleItem rule =
         idStr =
             String.fromInt (Rule.ruleIdToInt rule.id)
     in
-    H.li []
-        [ H.strong [] [ H.text ("Step " ++ String.fromInt rule.step ++ ": ") ]
-        , H.text rule.rule
-        , H.text " "
-        , H.a [ A.href ("/rules/" ++ idStr ++ "/edit") ] [ H.text "[Edit]" ]
-        , H.form
-            [ A.method "post"
-            , A.action ("/rules/" ++ idStr ++ "/delete")
-            , A.style "display" "inline"
-            ]
-            [ H.button [ A.type_ "submit" ] [ H.text "[Delete]" ]
+    H.tr []
+        [ H.td [] [ H.text rule.rule ]
+        , H.td [ A.style "white-space" "nowrap" ] [ H.small [ A.class "muted" ] [ H.text ("Interval: " ++ String.fromInt rule.step) ] ]
+        , H.td [ A.class "cluster gap-4xs", A.style "align-items" "center" ]
+            [ H.form
+                [ A.method "post"
+                , A.action ("/rules/" ++ idStr ++ "/delete")
+                , A.style "display" "inline"
+                , A.style "white-space" "nowrap"
+                ]
+                [ H.a [ A.href ("/rules/" ++ idStr ++ "/edit"), A.class "btn outline size-xs" ] [ H.text "Edit" ]
+                , H.button [ A.type_ "submit", A.class "danger size-xs" ] [ H.text "Delete" ]
+                ]
             ]
         ]
 
@@ -600,9 +619,9 @@ ruleForm maybeRule =
                 Just _ ->
                     "Update Rule"
     in
-    H.form [ A.method "post", A.action action ]
+    H.form [ A.method "post", A.action action, A.class "stack" ]
         [ H.div []
-            [ H.label [ A.for "rule" ] [ H.text "Rule: " ]
+            [ H.label [ A.for "rule" ] [ H.text "Rule" ]
             , H.input
                 [ A.type_ "text"
                 , A.name "rule"
@@ -613,7 +632,7 @@ ruleForm maybeRule =
                 []
             ]
         , H.div []
-            [ H.label [ A.for "step" ] [ H.text "Step: " ]
+            [ H.label [ A.for "step" ] [ H.text "Interval" ]
             , H.input
                 [ A.type_ "number"
                 , A.name "step"
@@ -621,11 +640,12 @@ ruleForm maybeRule =
                 , A.value stepValue
                 , A.attribute "min" "1"
                 , A.attribute "required" "required"
+                , A.style "width" "5rem"
                 ]
                 []
             ]
         , H.div []
-            [ H.button [ A.type_ "submit" ] [ H.text buttonText ]
+            [ H.button [ A.type_ "submit", A.class "primary" ] [ H.text buttonText ]
             ]
         ]
 
@@ -635,8 +655,10 @@ editRulePage rule =
     layout
         { title = "Edit Rule - Growth"
         , body =
-            [ H.h1 [] [ H.text "Edit Rule" ]
-            , H.p [] [ H.a [ A.href "/rules" ] [ H.text "Back to Rules" ] ]
+            [ H.header [ A.class "cluster" ]
+                [ H.h1 [] [ H.text "Edit Rule" ]
+                , H.a [ A.href "/rules", A.class "link-subtle" ] [ H.text "Back to Rules" ]
+                ]
             , ruleForm (Just rule)
             ]
         }
@@ -648,8 +670,10 @@ errorPage status message =
         { title = "Error - Growth"
         , body =
             [ H.h1 [] [ H.text ("Error " ++ String.fromInt status) ]
-            , H.p [] [ H.text message ]
-            , H.p [] [ H.a [ A.href "/" ] [ H.text "Back to Home" ] ]
+            , H.div [ A.class "callout danger" ]
+                [ H.p [] [ H.text message ]
+                ]
+            , H.p [] [ H.a [ A.href "/", A.class "link-subtle" ] [ H.text "Back to Home" ] ]
             ]
         }
 
