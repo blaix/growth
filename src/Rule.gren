@@ -15,6 +15,7 @@ import Db
 import Db.Decode as Decode
 import Db.Encode as Encode
 import Task exposing (Task)
+import Time
 
 
 type RuleId
@@ -35,6 +36,7 @@ type alias Rule =
     { id : RuleId
     , rule : String
     , interval : Int
+    , lastSeen : Time.Posix
     }
 
 
@@ -45,7 +47,7 @@ type alias Rule =
 getAllRules : Db.Connection -> Task Db.Error (Array Rule)
 getAllRules connection =
     Db.getAll connection
-        { query = "SELECT id, rule, interval FROM rules ORDER BY rule ASC"
+        { query = "SELECT id, rule, interval, last_seen FROM rules ORDER BY rule ASC"
         , parameters = []
         , decoder = ruleDecoder
         }
@@ -54,7 +56,7 @@ getAllRules connection =
 getRule : Db.Connection -> RuleId -> Task Db.Error (Maybe Rule)
 getRule connection ruleId =
     Db.getMaybeOne connection
-        { query = "SELECT id, rule, interval FROM rules WHERE id = :id"
+        { query = "SELECT id, rule, interval, last_seen FROM rules WHERE id = :id"
         , parameters = [ Encode.int "id" (ruleIdToInt ruleId) ]
         , decoder = ruleDecoder
         }
@@ -76,7 +78,7 @@ createRule connection newRule =
         |> Task.map (\_ -> {})
 
 
-updateRule : Db.Connection -> Rule -> Task Db.Error {}
+updateRule : Db.Connection -> { id : RuleId, rule : String, interval : Int } -> Task Db.Error {}
 updateRule connection rule =
     Db.execute connection
         { statement = "UPDATE rules SET rule = :rule, interval = :interval WHERE id = :id"
@@ -107,8 +109,10 @@ ruleDecoder =
     Decode.field Decode.int "id" <| \id ->
     Decode.field Decode.string "rule" <| \rule ->
     Decode.field Decode.int "interval" <| \interval ->
+    Decode.field Decode.posix "last_seen" <| \lastSeen ->
     Decode.succeed
         { id = ruleIdFromInt id
         , rule = rule
         , interval = interval
+        , lastSeen = lastSeen
         }
