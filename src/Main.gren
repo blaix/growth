@@ -170,8 +170,11 @@ runMigrations connection columns =
                 [ { needed = hasColumn "step" && not (hasColumn "interval")
                   , statement = "ALTER TABLE rules RENAME COLUMN step TO interval"
                   }
-                , { needed = not (hasColumn "last_seen")
-                  , statement = "ALTER TABLE rules ADD COLUMN last_seen INTEGER NOT NULL DEFAULT 0"
+                , { needed = not (hasColumn "last_seen") && not (hasColumn "show_again")
+                  , statement = "ALTER TABLE rules ADD COLUMN show_again INTEGER NOT NULL DEFAULT 0"
+                  }
+                , { needed = hasColumn "last_seen" && not (hasColumn "show_again")
+                  , statement = "ALTER TABLE rules RENAME COLUMN last_seen TO show_again"
                   }
                 ]
     in

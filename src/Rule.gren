@@ -36,7 +36,7 @@ type alias Rule =
     { id : RuleId
     , rule : String
     , interval : Int
-    , lastSeen : Time.Posix
+    , showAgain : Time.Posix
     }
 
 
@@ -47,7 +47,7 @@ type alias Rule =
 getAllRules : Db.Connection -> Task Db.Error (Array Rule)
 getAllRules connection =
     Db.getAll connection
-        { query = "SELECT id, rule, interval, last_seen FROM rules ORDER BY rule ASC"
+        { query = "SELECT id, rule, interval, show_again FROM rules ORDER BY rule ASC"
         , parameters = []
         , decoder = ruleDecoder
         }
@@ -56,7 +56,7 @@ getAllRules connection =
 getRule : Db.Connection -> RuleId -> Task Db.Error (Maybe Rule)
 getRule connection ruleId =
     Db.getMaybeOne connection
-        { query = "SELECT id, rule, interval, last_seen FROM rules WHERE id = :id"
+        { query = "SELECT id, rule, interval, show_again FROM rules WHERE id = :id"
         , parameters = [ Encode.int "id" (ruleIdToInt ruleId) ]
         , decoder = ruleDecoder
         }
@@ -69,7 +69,7 @@ getRule connection ruleId =
 createRule : Db.Connection -> { rule : String, interval : Int } -> Task Db.Error {}
 createRule connection newRule =
     Db.execute connection
-        { statement = "INSERT INTO rules (rule, interval) VALUES (:rule, :interval)"
+        { statement = "INSERT INTO rules (rule, interval, show_again) VALUES (:rule, :interval, strftime('%s', 'now') + 3600)"
         , parameters =
             [ Encode.string "rule" newRule.rule
             , Encode.int "interval" newRule.interval
@@ -109,10 +109,10 @@ ruleDecoder =
     Decode.field Decode.int "id" <| \id ->
     Decode.field Decode.string "rule" <| \rule ->
     Decode.field Decode.int "interval" <| \interval ->
-    Decode.field Decode.posix "last_seen" <| \lastSeen ->
+    Decode.field Decode.posix "show_again" <| \showAgain ->
     Decode.succeed
         { id = ruleIdFromInt id
         , rule = rule
         , interval = interval
-        , lastSeen = lastSeen
+        , showAgain = showAgain
         }
