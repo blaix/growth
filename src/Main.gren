@@ -10,7 +10,9 @@ import HttpServer exposing (Request, Server)
 import HttpServer.Response as Response exposing (Response)
 import Init
 import Node exposing (Environment)
+import Math
 import Rule exposing (Rule, RuleId)
+import Time
 import Stream.Log
 import Task
 import Transmutable.Html as H exposing (Html)
@@ -197,9 +199,12 @@ type Msg
     | SchemaInitialized (Result Db.Error {})
     | GotRules { response : Response, result : Result Db.Error (Array Rule) }
     | GotRule { response : Response, ruleId : String, result : Result Db.Error (Maybe Rule) }
+    | GotNextDueRule { response : Response, result : Result Db.Error (Maybe Rule) }
     | RuleCreated { response : Response, result : Result Db.Error {} }
     | RuleUpdated { response : Response, result : Result Db.Error {} }
     | RuleDeleted { response : Response, result : Result Db.Error {} }
+    | RuleMarkedGood { response : Response, result : Result Db.Error {} }
+    | RuleMarkedAgain { response : Response, result : Result Db.Error {} }
 
 
 
@@ -319,6 +324,42 @@ update msg model =
                     , command = sendError response 500 ("Failed to delete rule: " ++ Db.errorToString error)
                     }
 
+        GotNextDueRule { response, result } ->
+            when result is
+                Ok maybeRule ->
+                    { model = model
+                    , command = sendHtml response (homePage maybeRule)
+                    }
+
+                Err error ->
+                    { model = model
+                    , command = sendError response 500 ("Database error: " ++ Db.errorToString error)
+                    }
+
+        RuleMarkedGood { response, result } ->
+            when result is
+                Ok _ ->
+                    { model = model
+                    , command = redirect response "/"
+                    }
+
+                Err error ->
+                    { model = model
+                    , command = sendError response 500 ("Failed to mark rule: " ++ Db.errorToString error)
+                    }
+
+        RuleMarkedAgain { response, result } ->
+            when result is
+                Ok _ ->
+                    { model = model
+                    , command = redirect response "/"
+                    }
+
+                Err error ->
+                    { model = model
+                    , command = sendError response 500 ("Failed to mark rule: " ++ Db.errorToString error)
+                    }
+
 
 
 -- ROUTING
@@ -329,7 +370,10 @@ handleRequest model request response =
     when Array.dropFirst 1 (String.split "/" request.url.path) is
         [ "" ] ->
             { model = model
-            , command = sendHtml response homePage
+            , command =
+                Time.now
+                    |> Task.andThen (\now -> Rule.getNextDueRule model.dbConnection now)
+                    |> Task.attempt (\result -> GotNextDueRule { response = response, result = result })
             }
 
         [ "rules" ] ->
@@ -391,6 +435,50 @@ handleRequest model request response =
                     , command = sendError response 405 "Method not allowed"
                     }
 
+        [ "rules", idStr, "good" ] ->
+            when request.method is
+                HttpServer.POST ->
+                    when String.toInt idStr is
+                        Just id ->
+                            { model = model
+                            , command =
+                                Time.now
+                                    |> Task.andThen (\now -> Rule.markRuleGood model.dbConnection now (Rule.ruleIdFromInt id))
+                                    |> Task.attempt (\result -> RuleMarkedGood { response = response, result = result })
+                            }
+
+                        Nothing ->
+                            { model = model
+                            , command = sendError response 400 "Invalid rule ID"
+                            }
+
+                _ ->
+                    { model = model
+                    , command = sendError response 405 "Method not allowed"
+                    }
+
+        [ "rules", idStr, "again" ] ->
+            when request.method is
+                HttpServer.POST ->
+                    when String.toInt idStr is
+                        Just id ->
+                            { model = model
+                            , command =
+                                Time.now
+                                    |> Task.andThen (\now -> Rule.markRuleAgain model.dbConnection now (Rule.ruleIdFromInt id))
+                                    |> Task.attempt (\result -> RuleMarkedAgain { response = response, result = result })
+                            }
+
+                        Nothing ->
+                            { model = model
+                            , command = sendError response 400 "Invalid rule ID"
+                            }
+
+                _ ->
+                    { model = model
+                    , command = sendError response 405 "Method not allowed"
+                    }
+
         [ "rules", idStr ] ->
             when request.method is
                 HttpServer.POST ->
@@ -431,7 +519,8 @@ handleCreateRule model request response =
         { rule = Just rule, interval = Just interval } ->
             { model = model
             , command =
-                Rule.createRule model.dbConnection { rule = rule, interval = interval }
+                Time.now
+                    |> Task.andThen (\now -> Rule.createRule model.dbConnection now { rule = rule, interval = interval })
                     |> Task.attempt (\result -> RuleCreated { response = response, result = result })
             }
 
@@ -535,6 +624,79 @@ redirect response path =
 
 
 
+-- TIME FORMATTING
+
+
+-- TODO: Make time zone dynamic (e.g., from user preferences or browser)
+easternTime : Time.Zone
+easternTime =
+    Time.customZone (-5 * 60) []
+
+
+formatDateTime : Time.Zone -> Time.Posix -> String
+formatDateTime zone posix =
+    let
+        month =
+            monthToInt (Time.toMonth zone posix)
+
+        day =
+            Time.toDay zone posix
+
+        year =
+            Time.toYear zone posix
+
+        hour24 =
+            Time.toHour zone posix
+
+        minute =
+            Time.toMinute zone posix
+
+        hour12 =
+            let
+                h = Math.remainderBy 12 hour24
+            in
+            if h == 0 then 12 else h
+
+        amPm =
+            if hour24 < 12 then "am" else "pm"
+
+        pad n =
+            if n < 10 then
+                "0" ++ String.fromInt n
+
+            else
+                String.fromInt n
+    in
+    String.fromInt month
+        ++ "/"
+        ++ String.fromInt day
+        ++ "/"
+        ++ String.fromInt year
+        ++ " "
+        ++ String.fromInt hour12
+        ++ ":"
+        ++ pad minute
+        ++ amPm
+
+
+monthToInt : Time.Month -> Int
+monthToInt month =
+    when month is
+        Time.Jan -> 1
+        Time.Feb -> 2
+        Time.Mar -> 3
+        Time.Apr -> 4
+        Time.May -> 5
+        Time.Jun -> 6
+        Time.Jul -> 7
+        Time.Aug -> 8
+        Time.Sep -> 9
+        Time.Oct -> 10
+        Time.Nov -> 11
+        Time.Dec -> 12
+
+
+
 -- VIEWS
 
 
@@ -566,15 +728,39 @@ layout config =
             )
 
 
-homePage : String
-homePage =
+homePage : Maybe Rule -> String
+homePage maybeRule =
     layout
         { title = "Growth"
         , body =
             [ H.h1 [] [ H.text "Growth" ]
-            , H.p [] [ H.text "A self-improvement app" ]
+            , when maybeRule is
+                Just rule ->
+                    H.div [ A.class "stack" ]
+                        [ H.div [ A.class "callout" ]
+                            [ H.p [] [ H.text rule.rule ]
+                            ]
+                        , H.p [] [ H.text "How well have you been remembering this?" ]
+                        , H.div [ A.class "cluster" ]
+                            [ H.form
+                                [ A.method "post"
+                                , A.action ("/rules/" ++ String.fromInt (Rule.ruleIdToInt rule.id) ++ "/good")
+                                ]
+                                [ H.button [ A.type_ "submit", A.class "primary" ] [ H.text "So good" ]
+                                ]
+                            , H.form
+                                [ A.method "post"
+                                , A.action ("/rules/" ++ String.fromInt (Rule.ruleIdToInt rule.id) ++ "/again")
+                                ]
+                                [ H.button [ A.type_ "submit", A.class "outline" ] [ H.text "No good" ]
+                                ]
+                            ]
+                        ]
+
+                Nothing ->
+                    H.p [] [ H.text "All done for now!" ]
             , H.nav []
-                [ H.a [ A.href "/rules", A.class "btn primary" ] [ H.text "Manage Rules" ]
+                [ H.a [ A.href "/rules", A.class "link-subtle" ] [ H.text "Manage Rules" ]
                 ]
             ]
         }
@@ -615,6 +801,7 @@ ruleItem rule =
     H.tr []
         [ H.td [] [ H.text rule.rule ]
         , H.td [ A.style "white-space" "nowrap" ] [ H.small [ A.class "muted" ] [ H.text ("Interval: " ++ String.fromInt rule.interval) ] ]
+        , H.td [ A.style "white-space" "nowrap" ] [ H.small [ A.class "muted" ] [ H.text ("Show: " ++ formatDateTime easternTime rule.showAgain) ] ]
         , H.td [ A.class "cluster gap-4xs", A.style "align-items" "center" ]
             [ H.form
                 [ A.method "post"

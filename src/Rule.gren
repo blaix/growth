@@ -5,9 +5,12 @@ module Rule exposing
     , ruleIdToInt
     , getAllRules
     , getRule
+    , getNextDueRule
     , createRule
     , updateRule
     , deleteRule
+    , markRuleGood
+    , markRuleAgain
     )
 
 import Array exposing (Array)
@@ -62,17 +65,38 @@ getRule connection ruleId =
         }
 
 
+getNextDueRule : Db.Connection -> Time.Posix -> Task Db.Error (Maybe Rule)
+getNextDueRule connection now =
+    Db.getMaybeOne connection
+        { query = """
+            SELECT id, rule, interval, show_again
+            FROM rules
+            WHERE show_again <= :now
+            ORDER BY show_again ASC
+            LIMIT 1
+            """
+        , parameters = [ Encode.posix "now" now ]
+        , decoder = ruleDecoder
+        }
+
+
 
 -- WRITE
 
 
-createRule : Db.Connection -> { rule : String, interval : Int } -> Task Db.Error {}
-createRule connection newRule =
+createRule : Db.Connection -> Time.Posix -> { rule : String, interval : Int } -> Task Db.Error {}
+createRule connection now newRule =
+    let
+        showAgain =
+            Time.posixToMillis now + (newRule.interval * 3600 * 1000)
+                |> Time.millisToPosix
+    in
     Db.execute connection
-        { statement = "INSERT INTO rules (rule, interval, show_again) VALUES (:rule, :interval, strftime('%s', 'now') + 3600)"
+        { statement = "INSERT INTO rules (rule, interval, show_again) VALUES (:rule, :interval, :showAgain)"
         , parameters =
             [ Encode.string "rule" newRule.rule
             , Encode.int "interval" newRule.interval
+            , Encode.posix "showAgain" showAgain
             ]
         }
         |> Task.map (\_ -> {})
@@ -98,6 +122,66 @@ deleteRule connection ruleId =
         , parameters = [ Encode.int "id" (ruleIdToInt ruleId) ]
         }
         |> Task.map (\_ -> {})
+
+
+markRuleGood : Db.Connection -> Time.Posix -> RuleId -> Task Db.Error {}
+markRuleGood connection now ruleId =
+    getRule connection ruleId
+        |> Task.andThen
+            (\maybeRule ->
+                when maybeRule is
+                    Just rule ->
+                        let
+                            newInterval =
+                                rule.interval + 2
+
+                            showAgain =
+                                Time.posixToMillis now + (newInterval * 3600 * 1000)
+                                    |> Time.millisToPosix
+                        in
+                        Db.execute connection
+                            { statement = "UPDATE rules SET interval = :interval, show_again = :showAgain WHERE id = :id"
+                            , parameters =
+                                [ Encode.int "id" (ruleIdToInt ruleId)
+                                , Encode.int "interval" newInterval
+                                , Encode.posix "showAgain" showAgain
+                                ]
+                            }
+                            |> Task.map (\_ -> {})
+
+                    Nothing ->
+                        Task.succeed {}
+            )
+
+
+markRuleAgain : Db.Connection -> Time.Posix -> RuleId -> Task Db.Error {}
+markRuleAgain connection now ruleId =
+    getRule connection ruleId
+        |> Task.andThen
+            (\maybeRule ->
+                when maybeRule is
+                    Just rule ->
+                        let
+                            newInterval =
+                                max 1 (rule.interval - 1)
+
+                            showAgain =
+                                Time.posixToMillis now + (newInterval * 3600 * 1000)
+                                    |> Time.millisToPosix
+                        in
+                        Db.execute connection
+                            { statement = "UPDATE rules SET interval = :interval, show_again = :showAgain WHERE id = :id"
+                            , parameters =
+                                [ Encode.int "id" (ruleIdToInt ruleId)
+                                , Encode.int "interval" newInterval
+                                , Encode.posix "showAgain" showAgain
+                                ]
+                            }
+                            |> Task.map (\_ -> {})
+
+                    Nothing ->
+                        Task.succeed {}
+            )
 
 
 
