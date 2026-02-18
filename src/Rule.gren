@@ -17,6 +17,8 @@ import Array exposing (Array)
 import Db
 import Db.Decode as Decode
 import Db.Encode as Encode
+import Math
+import Random
 import Task exposing (Task)
 import Time
 
@@ -88,8 +90,7 @@ createRule : Db.Connection -> Time.Posix -> { rule : String, interval : Int } ->
 createRule connection now newRule =
     let
         showAgain =
-            Time.posixToMillis now + (newRule.interval * 3600 * 1000)
-                |> Time.millisToPosix
+            calculateShowAgain now newRule.interval
     in
     Db.execute connection
         { statement = "INSERT INTO rules (rule, interval, show_again) VALUES (:rule, :interval, :showAgain)"
@@ -124,6 +125,23 @@ deleteRule connection ruleId =
         |> Task.map (\_ -> {})
 
 
+calculateShowAgain : Time.Posix -> Int -> Time.Posix
+calculateShowAgain now interval =
+    let
+        seed =
+            Random.initialSeed (Time.posixToMillis now)
+
+        { value } =
+            Random.step (Random.float 1 2) seed
+
+        delayMillis =
+            toFloat interval * value * 3600 * 1000
+                |> Math.round
+    in
+    Time.posixToMillis now + delayMillis
+        |> Time.millisToPosix
+
+
 markRuleGood : Db.Connection -> Time.Posix -> RuleId -> Task Db.Error {}
 markRuleGood connection now ruleId =
     getRule connection ruleId
@@ -136,8 +154,7 @@ markRuleGood connection now ruleId =
                                 rule.interval + 2
 
                             showAgain =
-                                Time.posixToMillis now + (newInterval * 3600 * 1000)
-                                    |> Time.millisToPosix
+                                calculateShowAgain now newInterval
                         in
                         Db.execute connection
                             { statement = "UPDATE rules SET interval = :interval, show_again = :showAgain WHERE id = :id"
@@ -166,8 +183,7 @@ markRuleAgain connection now ruleId =
                                 max 1 (rule.interval - 1)
 
                             showAgain =
-                                Time.posixToMillis now + (newInterval * 3600 * 1000)
-                                    |> Time.millisToPosix
+                                calculateShowAgain now newInterval
                         in
                         Db.execute connection
                             { statement = "UPDATE rules SET interval = :interval, show_again = :showAgain WHERE id = :id"
