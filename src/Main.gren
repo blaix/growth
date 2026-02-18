@@ -759,6 +759,7 @@ homePage maybeRule =
 
                 Nothing ->
                     H.p [] [ H.text "All done for now!" ]
+            , H.hr [] []
             , H.nav []
                 [ H.a [ A.href "/rules", A.class "link-subtle" ] [ H.text "Manage Rules" ]
                 ]
